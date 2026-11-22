@@ -1,0 +1,4 @@
+include install.sh
+include scripts/check.sh
+include docs/live-view.png
+recursive-include tests *.py

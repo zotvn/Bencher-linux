@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bencher Linux report</title>
+<style>
+:root { color-scheme:dark; font:15px system-ui,sans-serif; color:#dce7ee; background:#0b1119;
+        --card:#141e29; --muted:#a0b4c4; --blue:#8ccdea; --red:#ff9d89; }
+* { box-sizing:border-box; }
+body { max-width:1380px; margin:auto; padding:26px clamp(14px,3vw,44px); }
+header { display:flex; align-items:end; flex-wrap:wrap; justify-content:space-between; gap:12px; margin-bottom:20px; }
+h1,h2,p { margin:0; }
+h1 { font-size:clamp(24px,4vw,34px); }
+h2 { font-size:16px; margin-bottom:10px; }
+p { color:var(--muted); line-height:1.5; }
+a { color:var(--blue); }
+button { border:0; background:#243645; color:inherit; border-radius:6px; padding:8px 12px; font:inherit; cursor:pointer; }
+button:hover { background:#365465; }
+button:disabled { opacity:.45; cursor:default; }
+button:focus-visible, input:focus-visible, canvas:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+section { border-radius:12px; background:var(--card); padding:15px; margin:13px 0; }
+[hidden] { display:none !important; }
+#videoStage { position:relative; }
+#videoPreview { position:absolute; inset:0; border-radius:8px; background-color:#060a0e; background-repeat:no-repeat; }
+video { display:block; width:100%; max-height:58vh; background:#060a0e; border-radius:8px; }
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin-bottom:11px; }
+#position { margin-left:auto; font-variant-numeric:tabular-nums; }
+input[type=range] { width:100%; accent-color:var(--blue); margin:9px 0; }
+canvas { width:100%; height:152px; display:block; cursor:crosshair; }
+.legend { display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; font-size:12px; }
+.legend b { color:var(--blue); font-weight:600; }
+.legend .stutter { color:var(--red); }
+.readings { display:grid; grid-template-columns:repeat(auto-fit,minmax(142px,1fr)); gap:8px; }
+.metric { padding:9px 10px; background:#0f1822; border-radius:7px; min-height:66px; }
+.metric small { display:block; color:var(--muted); font-size:11px; margin-bottom:4px; }
+.metric strong { font-size:19px; font-variant-numeric:tabular-nums; }
+#threads { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+#threads span { background:#0f1822; padding:6px 8px; color:var(--muted); border-radius:5px; font-size:12px; }
+#warning { color:#ffc8b8; margin:7px 0; }
+@media (min-width:1020px) {
+    body.has-video #review { display:grid; grid-template-columns:minmax(0, 2fr) minmax(300px, 1fr);
+                             align-items:start; gap:14px; }
+    body.has-video #snapshotPanel { max-height:calc(100vh - 160px); overflow:auto; }
+    body.has-video video { max-height:50vh; }
+}
+select,input[type=number] {color:inherit;background:#101923;border:1px solid #405361;border-radius:5px;padding:6px;}
+#limit {width:6em} #count,#alignment {color:var(--muted);font-size:12px} #chart {touch-action:none}
+button.metric {text-align:left} .metric[aria-pressed=true] {outline:1px solid var(--blue)} #matches {max-width:100%}
+</style>
+</head>
+<body>
+<header>
+  <div><h1 id="title">Bencher Linux report</h1><p id="meta"></p></div>
+  <nav><a href="statistics.csv">Statistics CSV</a> · <a href="frames.csv">Presented frames CSV</a><span id="applicationfile" hidden> · <a href="application-frames.csv">Application frames</a></span>
+    <span id="simulationfile" hidden> · <a href="simulation-frames.csv">Simulation markers</a></span><span id="realfile" hidden> · <a href="real-frames.csv">Real frames CSV</a></span> · <a href="telemetry.json">JSON</a>
+    <span id="filelink" hidden> · <a href="benchmark.mp4">MP4</a></span></nav>
+</header>
+<p id="warning" hidden></p>
+<main id="review">
+<div>
+<section>
+  <div class="controls">
+    <label>Graph <select id="metric"></select></label>
+    <label>Find <select id="filter"><option value="stutter">Marked stutters</option><option value="below">Below threshold</option><option value="above">Above threshold</option><option value="max">Highest value</option><option value="min">Lowest value</option><option value="tail">Slowest 1% of frames</option></select></label>
+    <label id="limitLabel" hidden>Threshold <input id="limit" type="number" step="any" value="60"> <span id="unit"></span></label>
+    <label id="stutterLimitLabel">Minimum hitch <input id="stutterLimit" type="number" min="0" step="any" value="0" style="width:5em"> ms</label>
+  </div><div class="controls">
+    <button id="prevMatch">Previous match</button><button id="nextMatch">Next match</button>
+    <select id="matches" aria-label="Matching timestamps"></select><small id="count"></small>
+  </div><div class="controls">
+    <button id="play" hidden>Play</button>
+    <button id="back" hidden aria-label="Previous video frame">← Frame</button>
+    <button id="forward" hidden aria-label="Next video frame">Frame →</button>
+
+
+    <span id="position"></span>
+  </div>
+  <input id="scrub" type="range" min="0" value="0" step="0.001" aria-label="Benchmark timeline">
+  <canvas id="chart" tabindex="0" aria-label="Frame time chart. Select a point to seek."></canvas>
+  <p class="legend"><b id="chartLabel">Gamescope frame time</b><span class="stutter">● Filter match</span><span id="coverage"></span></p>
+</section>
+<section id="videoPanel" hidden><div id="videoStage"><video id="video" muted preload="auto" playsinline aria-label="Recorded game"></video><div id="videoPreview" hidden aria-hidden="true"></div></div><p id="alignment"></p></section>
+</div>
+<section id="snapshotPanel"><h2 id="snapshotTitle">System overview</h2><div class="readings" id="snapshot"></div><div id="threads"></div></section>
+</main>
+<section><h2>Benchmark summary</h2><div class="readings" id="summary"></div></section>
+
+<script>
+"use strict";
+const report = /*BENCHMARK_DATA*/null;
+const $ = id => document.getElementById(id);
+const video = $("video");
+const exact = report.frame_metrics_version === 2;
+const events = exact ? report.events : report.events.slice(1).map(([t, _ms, hitch], i) =>
+    [t, (t - report.events[i][0]) * 1000, hitch]).filter(([, ms]) => ms > 0);
+const samples = report.samples;
+const real = report.real_events || [];
+const realSummary = report.real_summary || {};
+const application = report.application_events || [];
+const simulation = report.simulation_events || [];
+const applicationSummary = report.application_summary || {};
+const simulationSummary = report.simulation_summary || {};
+const intervalFps = frames => frames.map(([t,ms])=>[t,1000/ms]);
+// A message arriving late can compress the next interval to almost zero.
+// Count completed one-second buckets and retain the individual timestamps for seeking.
+const presentedCounts = [];
+for (const [t] of events) {
+    const second = Math.floor(t);
+    presentedCounts[second] = (presentedCounts[second] || 0) + 1;
+}
+const completedSeconds = Math.floor(report.duration_s);
+const presentedFps = events.map(([t]) => {
+    const second = Math.floor(t);
+    return [t, second < completedSeconds ? presentedCounts[second] : null];
+});
+const realFps = real.map(([t, ms])=>[t, 1000/ms]);
+const generatedFps = real.map(([t, ms, count])=>[t, count * 1000/ms]);
+const frameSeries = new Map([
+    ["event", events], ["fps",presentedFps], ["real_ms",real],
+    ["rendered_fps",realFps], ["generated_fps",generatedFps],
+    ["application_ms",application], ["application_fps",intervalFps(application)],
+    ["simulation_fps",intervalFps(simulation)]
+]);
+$("realfile").hidden = !real.length;
+$("applicationfile").hidden = !application.length;
+$("simulationfile").hidden = !simulation.length;
+const warnings = report.warnings.map(message =>
+    message === "Real per-frame timing was unavailable for this capture" && samples.some(s=>Number.isFinite(s.game.rendered_fps))
+        ? "Real FPS in this run uses one-second samples. Start a new game session to load the per-frame recorder."
+        : message
+);
+const stutters = events.filter(event => event[2]);
+const movie = report.video;
+const frames = movie ? movie.frame_times_s : [];
+const offset = movie ? movie.offset_s : 0;
+const total = report.duration_s;
+const bank = samples.at(-1) || {hardware:{},game:{},lsfg:{}};
+let cursor = movie ? offset : 0;
+let frame = 0;
+let inFlight = null;
+let pending = null;
+let decoded = null;
+let dragging = false;
+let pointer = null;
+let scrubTask = 0;
+let pendingTime = null;
+const preview = $("videoPreview");
+const previewSheets = new Map();
+
+function lower(items, time, get = value => value) {
+    let lo = 0, hi = items.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (get(items[mid]) < time) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+function nearest(items, time, get = value => value) {
+    const next = lower(items, time, get);
+    if (!next) return 0;
+    if (next === items.length) return next - 1;
+    return time - get(items[next - 1]) <= get(items[next]) - time ? next - 1 : next;
+}
+function pick(array, prop, combine) {
+    const values = array.map(prop).filter(Number.isFinite);
+    return values.length ? combine(values) : null;
+}
+const average = list => list.reduce((a, b) => a + b, 0) / list.length;
+const high = list => list.reduce((peak, value) => Math.max(peak, value), -Infinity);
+function fmt(value, digits = 0, unit = "") {
+    return Number.isFinite(value) ? value.toFixed(digits) + unit : "—";
+}
+function pair(value, totalValue, digits, unit) {
+    return Number.isFinite(value) && Number.isFinite(totalValue)
+        ? fmt(value, digits) + " / " + fmt(totalValue, digits, unit) : "—";
+}
+function renderMetrics(target, metrics) {
+    target.replaceChildren(...metrics.map(([name, value]) => {
+        const summaryGraph = {
+            "Average presented FPS":"fps","Peak presented FPS":"fps","Presented 1% low":"event","Real 1% low":"rendered_fps",
+            "Average application FPS":"application_fps","Application 1% low":"application_fps",
+            "Avg. Reflex simulation FPS":"simulation_fps","Worst application frame":"application_ms",
+            "Worst presented frame":"event","Worst real frame":"real_ms","Marked stutters":"event",
+            "Average real FPS":"rendered_fps","Average generated FPS":"generated_fps",
+            "Avg. sampled real FPS":"rendered_fps","Avg. sampled generated FPS":"generated_fps",
+            "Average CPU":"cpu","Peak CPU":"cpu","Average GPU":"gpu","Peak GPU":"gpu"
+        };
+        const card = document.createElement("button");
+        card.onclick=()=>{
+            $("metric").value=summaryGraph[name];
+            if (name==="Marked stutters") $("filter").value="stutter";
+            else if (name.endsWith("1% low")) $("filter").value="tail";
+            else if (name.startsWith("Peak") || name.startsWith("Worst")) $("filter").value="max";
+            selectMetric();
+            $("chart").scrollIntoView({block:"center"});
+        };
+        card.className = "metric";
+        const key = document.createElement("small");
+        const number = document.createElement("strong");
+        key.textContent = name;
+        number.textContent = value;
+        card.append(key, number);
+        return card;
+    }));
+}
+function summarize() {
+    const s = report.summary;
+    const legacyIntervals = exact ? [] : events.map(row=>row[1]).sort((a,b)=>a-b);
+    const legacyLow = legacyIntervals.length >= 100
+        ? 1000 / legacyIntervals.at(-Math.ceil(legacyIntervals.length / 100)) : null;
+    renderMetrics($("summary"), [
+        ["Average presented FPS", fmt(events.length ? events.length / total : null, 1)],
+        ["Average application FPS", fmt(applicationSummary.avg_fps, 1)],
+        ["Application 1% low", fmt(applicationSummary.low_1, 1)],
+        ["Avg. Reflex simulation FPS", fmt(simulationSummary.avg_fps, 1)],
+        ["Worst application frame", fmt(applicationSummary.max_ms, 2, " ms")],
+        ["Peak presented FPS", fmt(completedSeconds && events.length ? high(presentedCounts.slice(0, completedSeconds).filter(Number.isFinite)) : null)],
+        [real.length ? "Average real FPS" : "Avg. sampled real FPS",
+            fmt(real.length ? realSummary.avg_fps : pick(samples, x=>x.t>=1 ? x.game.rendered_fps : null, average), 1)],
+        [real.length ? "Average generated FPS" : "Avg. sampled generated FPS",
+            fmt(real.length ? realSummary.generated_fps : pick(samples, x=>x.t>=1 ? x.game.generated_fps : null, average), 1)],
+        ["Presented 1% low", fmt(exact ? s.low_1 : legacyLow, 1)],
+        ["Real 1% low", fmt(realSummary.low_1, 1)],
+        ["Worst presented frame", fmt(exact ? s.max_ms : events.length ? high(events.map(row=>row[1])) : null, 2, " ms")],
+        ["Worst real frame", fmt(realSummary.max_ms, 2, " ms")],
+        ["Marked stutters", fmt(s.stutters)],
+        ["Average CPU", fmt(pick(samples, x => x.hardware.cpu, average), 1, "%")],
+        ["Peak CPU", fmt(pick(samples, x => x.hardware.cpu, high), 1, "%")],
+        ["Average GPU", fmt(pick(samples, x => x.hardware.gpu, average), 1, "%")],
+        ["Peak GPU", fmt(pick(samples, x => x.hardware.gpu, high), 1, "%")]
+    ]);
+}
+const metrics = new Map();
+function metric(id, label, unit, source, divisor=1) {
+    metrics.set(id, {label, unit, read: s => {
+        const v = source(s);
+        return Number.isFinite(v) ? v / divisor : null;
+    }});
+}
+metric("event", "Presented frame interval", "ms", s => s.game.frame_ms);
+metric("real_ms", "Real frame interval", "ms", () => null);
+metric("application_ms", "Application frame interval", "ms", () => null);
+metric("application_fps", "Application FPS (frame equivalent)", "FPS", () => null);
+metric("simulation_fps", "Reflex simulation FPS", "FPS", () => null);
+const fields = {
+    game: [
+        ["fps","Presented FPS (1 s)","FPS"],["rendered_fps","Real FPS (frame equivalent)","FPS"],["generated_fps","Generated FPS","FPS"],
+        ["frame_ms","Sampled frame time","ms"],["cpu_render_ms","CPU submit span","ms"],
+        ["gpu_render_ms","GPU frame span","ms"],["input_present_ms","Reflex input to present","ms"],
+        ],
+    hardware: [
+        ["cpu","CPU load","%"],["gpu","GPU load","%"],["ram_used","RAM used","GiB"],["vram_used","VRAM used","GiB"],
+        ["ram_total","Installed RAM","GiB"],["vram_total","Available VRAM capacity","GiB"],["swap_used","Swap used","GiB"],["swap_total","Swap capacity","GiB"],
+        ["cpu_temp","CPU temperature","°C"],["gpu_temp","GPU temperature","°C"],["cpu_mhz","CPU clock","GHz",1000],
+        ["gpu_clock","GPU clock","MHz"],["gpu_mem_clock","GPU memory clock","MHz"],["gpu_power","GPU power","W"],
+        ["gpu_limit","GPU power limit","W"],["fan","GPU fan","%"],["download","Download","MiB/s",1048576],
+        ["upload","Upload","MiB/s",1048576],["disk_read","Disk read","MiB/s",1048576],["disk_write","Disk write","MiB/s",1048576]],
+    lsfg: [["multiplier","Requested multiplier","×"],["observed","Observed multiplier","×"]]
+};
+for (const [source, entries] of Object.entries(fields)) {
+    for (const [key,label,unit,divisor] of entries) metric(key,label,unit,s=>s[source]?.[key],divisor);
+}
+for (let i=0;i<(bank.hardware.cores || []).length;i++) metric("core"+i,"CPU thread "+i,"%",s=>s.hardware.cores?.[i]);
+const cards = new Map();
+for (const [id,m] of metrics) {
+    $("metric").add(new Option(m.label,id));
+    const card = document.createElement("button");
+    card.className="metric";
+    const label=document.createElement("small"), value=document.createElement("strong");
+    label.textContent=m.label;
+    card.append(label,value);
+    card.onclick=()=>{ $("metric").value=id; selectMetric(); $("chart").scrollIntoView({block:"nearest"}); };
+    $("snapshot").append(card);
+    cards.set(id,{card,value});
+}
+function clock(t) {
+    const ms=Math.round(t*1000);
+    return Math.floor(ms/60000)+":"+String(Math.floor(ms/1000)%60).padStart(2,"0")+"."+String(ms%1000).padStart(3,"0");
+}
+function updateReadings() {
+    const sample=samples[lower(samples,cursor+.000001,s=>s.t)-1];
+    $("snapshotTitle").textContent="System overview · "+clock(cursor);
+    for (const [id,m] of metrics) {
+        const series = frameSeries.get(id);
+        const point = series?.[lower(series,cursor + 1e-9,e=>e[0])-1];
+        const v = series?.length ? point?.[1] : sample && m.read(sample);
+        cards.get(id).value.textContent=fmt(v,Number.isInteger(v)?0:2," "+m.unit);
+    }
+    $("threads").textContent=sample?.lsfg.reason || "";
+}
+let points=[], hits=[];
+const thresholds=new Map();
+function selectMetric() {
+    const id=$("metric").value, m=metrics.get(id);
+    for (const [key,c] of cards) c.card.setAttribute("aria-pressed",String(key===id));
+    const series = frameSeries.get(id);
+    points=series?.length ? series : samples.map(s=>[s.t,m.read(s)]);
+    $("unit").textContent=m.unit;
+    $("limit").value=thresholds.get(id) ?? ({FPS:60,ms:50,"%":90}[m.unit] ?? 1);
+    filterPoints();
+}
+function filterPoints() {
+    const op=$("filter").value, limit=$("limit").valueAsNumber;
+    $("limitLabel").hidden=!["below","above"].includes(op);
+    $("stutterLimitLabel").hidden=op!=="stutter";
+    hits=[];
+    if (op==="stutter") hits=stutters.filter(p=>p[1]>=Math.max(0,$("stutterLimit").valueAsNumber || 0)).map(p=>({start:p[0],end:p[0],t:p[0],v:p[1]}));
+    else {
+        const values=points.map(p=>p[1]).filter(Number.isFinite);
+        const extreme=op==="min"?values.reduce((a,b)=>Math.min(a,b),Infinity):high(values);
+        const smallerIsWorse=metrics.get($("metric").value).unit==="FPS";
+        const tailValues=op==="tail"?values.sort((a,b)=>smallerIsWorse?a-b:b-a):[];
+        const boundary=tailValues[Math.ceil(tailValues.length*.01)-1];
+        let group=null;
+        for (const [t,v] of points) {
+            const match=Number.isFinite(v) && (op==="below"?v<limit:op==="above"?v>limit:op==="tail"?(smallerIsWorse?v<=boundary:v>=boundary):v===extreme);
+            if (!match) { group=null; continue; }
+            if (!group) { group={start:t,end:t,t,v}; hits.push(group); }
+            group.end=t;
+            if (op==="below" || (op==="tail" && smallerIsWorse) ? v<group.v : v>group.v) { group.t=t; group.v=v; }
+        }
+    }
+    const select=$("matches");
+    select.replaceChildren(new Option("Jump to a match",""));
+    for (const [i,h] of hits.entries()) select.add(new Option(clock(h.start)+(h.end>h.start?" – "+clock(h.end):"")+" · "+fmt(h.v,2," "+(op==="stutter"?"ms":metrics.get($("metric").value).unit)),String(i)));
+    $("count").textContent=hits.length+" matches";
+    select.disabled=!hits.length;
+    prepareChart(); setCursor(cursor,true);
+}
+$("metric").onchange=selectMetric;
+$("filter").onchange=filterPoints;
+$("stutterLimit").oninput=filterPoints;
+$("limit").oninput=()=>{thresholds.set($("metric").value,$("limit").value);filterPoints();};
+$("matches").onchange=e=>{if(e.target.value!=="") seekTime(hits[Number(e.target.value)].t);};
+$("prevMatch").onclick=()=>{const i=lower(hits,cursor-.000001,h=>h.t)-1;if(i>=0) seekTime(hits[i].t);};
+$("nextMatch").onclick=()=>{const i=lower(hits,cursor+.000001,h=>h.t);if(i<hits.length) seekTime(hits[i].t);};
+let staticChart = document.createElement("canvas");
+function prepareChart() {
+    const chart = $("chart");
+    const scale = devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(chart.clientWidth * scale));
+    const height = Math.max(1, Math.round(chart.clientHeight * scale));
+    chart.width = staticChart.width = width;
+    chart.height = staticChart.height = height;
+    const ctx = staticChart.getContext("2d");
+    ctx.strokeStyle = "#2a3d4a";
+    ctx.lineWidth = scale;
+    for (let i = 1; i < 4; i++) {
+        ctx.beginPath(); ctx.moveTo(0, height * i / 4); ctx.lineTo(width, height * i / 4); ctx.stroke();
+    }
+    const m=metrics.get($("metric").value);
+    const ceiling=Math.max(1, high(points.map(p=>p[1]).filter(Number.isFinite)));
+    const series = frameSeries.get($("metric").value);
+    const source = $("metric").value === "fps" && events.length ? "one-second counts" : series?.length ? "per frame" : "sampled";
+    $("chartLabel").textContent=m.label+" · "+source+" · 0–"+fmt(ceiling,1," "+m.unit);
+    const xy = point => [point[0] / total * width, height - 5 - Math.min(point[1] / ceiling, 1) * (height - 10)];
+    ctx.strokeStyle = "#8ccdea";
+    ctx.beginPath();
+    let begin = true;
+    for (const point of points) {
+        if (!Number.isFinite(point[1])) { begin = true; continue; }
+        const [x, y] = xy(point);
+        if (begin) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        begin = false;
+    }
+    ctx.stroke();
+    ctx.fillStyle = "#ff9d89";
+    ctx.globalAlpha=.45;
+    for (const h of hits) ctx.fillRect(h.start/total*width,0,Math.max(2*scale,(h.end-h.start)/total*width),height);
+    ctx.globalAlpha=1;
+    drawCursor();
+}
+function drawCursor() {
+    const chart = $("chart");
+    const ctx = chart.getContext("2d");
+    ctx.clearRect(0, 0, chart.width, chart.height);
+    ctx.drawImage(staticChart, 0, 0);
+    ctx.fillStyle = "#eaf8ff";
+    ctx.fillRect(cursor / total * chart.width, 0, Math.max(1, devicePixelRatio), chart.height);
+}
+let lastReadout = -Infinity;
+let lastReadoutSample = -1;
+function setCursor(time, force = false) {
+    cursor = Math.min(total, Math.max(0, time));
+    $("scrub").value = cursor;
+    $("position").textContent = cursor.toFixed(3) + " / " + total.toFixed(1) + " s" +
+        (movie ? " · Frame " + (frame + 1) + " / " + frames.length : "");
+    $("prevMatch").disabled=!hits.length || hits[0].t>=cursor-.000001;
+    $("nextMatch").disabled=!hits.length || hits.at(-1).t<=cursor+.000001;
+    if (movie) updateAlignment();
+    drawCursor();
+    const hwIndex = lower(samples, cursor, s => s.t);
+    if (force || Math.abs(lastReadout - cursor) >= .085 || lastReadoutSample !== hwIndex) {
+        lastReadout = cursor;
+        lastReadoutSample = hwIndex;
+        updateReadings();
+    }
+}
+function updateAlignment() {
+    if (!preview.hidden)
+        $("alignment").textContent = "Scrub preview · " + clock(offset + frames[Number(preview.dataset.frame)]);
+    else if (decoded !== null)
+        $("alignment").textContent = "Recorded frame at " + clock(offset + frames[decoded]) + " · " +
+            Math.round((offset + frames[decoded] - cursor) * 1000) + " ms from selection";
+}
+
+function warmSheet(sheet) {
+    const config = movie.preview;
+    if (sheet < 0 || sheet >= config.sheets) return;
+    const existing = previewSheets.get(sheet);
+    if (existing) return existing;
+    const img = new Image();
+    const entry = {img, ready: false};
+    previewSheets.set(sheet, entry);
+    img.src = "previews/" + String(sheet + 1).padStart(4, "0") + ".jpg";
+    img.decode().then(() => {
+        entry.ready = true;
+        if (dragging && sheet === Math.floor(frame / (config.columns * config.rows)))
+            paintPreview(frame);
+    }).catch(() => previewSheets.delete(sheet));
+    return entry;
+}
+
+function paintPreview(index) {
+    const config = movie.preview;
+    if (!config) return;
+    const perSheet = config.columns * config.rows;
+    const sheet = Math.floor(index / perSheet);
+    for (const key of previewSheets.keys()) {
+        if (Math.abs(key - sheet) > 2) previewSheets.delete(key);
+    }
+    const image = warmSheet(sheet);
+    warmSheet(sheet + 1);
+    warmSheet(sheet - 1);
+    if (!image?.ready) return;
+    const tile = index % perSheet;
+    const x = tile % config.columns, y = Math.floor(tile / config.columns);
+    preview.style.backgroundImage = 'url("' + image.img.src + '")';
+    preview.style.backgroundSize = (config.columns * 100) + "% " + (config.rows * 100) + "%";
+    preview.style.backgroundPosition = (100 * x / (config.columns - 1)) + "% " + (100 * y / (config.rows - 1)) + "%";
+    preview.dataset.frame = String(index);
+    preview.hidden = false;
+    updateAlignment();
+}
+
+function pumpSeek() {
+    if (inFlight !== null || pending === null || video.readyState < 1) return;
+    const next = pending;
+    pending = null;
+    if (next === decoded) {
+        if (!dragging) preview.hidden = true;
+        updateAlignment();
+        return;
+    }
+    inFlight = next;
+    const pts = frames[next];
+    const gap = (frames[next + 1] ?? pts + .004) - pts;
+    video.currentTime = pts + Math.min(.002, gap / 2);
+}
+function seekFrame(index, selectedTime) {
+    frame = Math.max(0, Math.min(frames.length - 1, index));
+    video.pause();
+    if (dragging) paintPreview(frame);
+    pending = frame;
+    setCursor(selectedTime ?? offset + frames[frame], true);
+    pumpSeek();
+}
+function displayed(mediaTime) {
+    if (video.paused) return;
+    decoded = frame = nearest(frames, mediaTime);
+    setCursor(offset + frames[frame]);
+}
+function seekTime(time) {
+    if (movie) seekFrame(nearest(frames, time - offset), time);
+    else setCursor(time, true);
+}
+function queueScrub(time) {
+    pendingTime = time;
+    if (!scrubTask) {
+        scrubTask = requestAnimationFrame(() => {
+            scrubTask = 0;
+            seekTime(pendingTime);
+        });
+    }
+}
+function finishScrub() {
+    dragging = false;
+    if (scrubTask) {
+        cancelAnimationFrame(scrubTask);
+        scrubTask = 0;
+        seekTime(pendingTime);
+    }
+    if (!movie || decoded === frame) preview.hidden = true;
+    if (movie) updateAlignment();
+}
+
+$("meta").textContent = (movie ? movie.encoder + " · " + frames.length + " video frames" : "Statistics") +
+    " · " + total.toFixed(1) + " s · " + report.started.replace("T", " ") +
+    (bank.hardware.cpu_name ? " · " + bank.hardware.cpu_name + " / " + bank.hardware.gpu_name : "");
+$("title").textContent = report.title + " benchmark";
+$("coverage").textContent = [events.length ? events.length + " Gamescope events" : "",
+    application.length ? application.length + " application frames" : "",
+    simulation.length ? simulation.length + " simulation intervals" : "",
+    "Hardware sampled about once per second"].filter(Boolean).join(" · ");
+if (report.unindexed_video) $("filelink").hidden=false;
+if (warnings.length) {
+    $("warning").hidden = false;
+    $("warning").textContent = warnings.join(" · ");
+}
+$("scrub").max = total;
+$("scrub").onpointerdown = () => { dragging = true; };
+$("scrub").oninput = e => queueScrub(Number(e.target.value));
+window.addEventListener("pointerup", finishScrub);
+window.addEventListener("pointercancel", finishScrub);
+function inspectPointer(e) {
+    const rect=$("chart").getBoundingClientRect();
+    const t=Math.max(0,Math.min(total,(e.clientX-rect.left)/rect.width*total));
+    queueScrub(points.length?points[nearest(points,t,p=>p[0])][0]:t);
+}
+$("chart").onpointerdown = e => {
+    if (e.button !== 0) return;
+    pointer = e.pointerId;
+    dragging = true;
+    $("chart").setPointerCapture(pointer);
+    inspectPointer(e);
+};
+$("chart").onpointermove = e => {
+    if (pointer === e.pointerId) inspectPointer(e);
+};
+$("chart").onlostpointercapture = () => { pointer = null; finishScrub(); };
+$("chart").onkeydown=e=>{
+    if (!["ArrowLeft","ArrowRight"].includes(e.key) || !points.length) return;
+    e.preventDefault(); e.stopPropagation();
+    const i=nearest(points,cursor,p=>p[0])+(e.key==="ArrowLeft"?-1:1);
+    seekTime(points[Math.max(0,Math.min(points.length-1,i))][0]);
+};
+if (movie) {
+    document.body.classList.add("has-video");
+    for (const id of ["videoPanel", "filelink", "play", "back", "forward"]) $(id).hidden = false;
+    video.src = movie.file;
+    $("play").onclick = () => video.paused ? video.play() : video.pause();
+    $("back").onclick = () => seekFrame(frame - 1);
+    $("forward").onclick = () => seekFrame(frame + 1);
+    video.onloadedmetadata = () => {
+        if (movie.preview) {
+            warmSheet(0);
+            warmSheet(1);
+        }
+        pumpSeek();
+    };
+    video.onplay = () => {
+        pending = inFlight = null;
+        preview.hidden = true;
+        $("play").textContent = "Pause";
+    };
+    video.onpause = () => { $("play").textContent = "Play"; };
+    video.onended = () => { $("play").textContent = "Play"; };
+    video.onloadeddata = () => {
+        if (decoded === null && inFlight === null && video.currentTime === 0) {
+            decoded = 0;
+            updateAlignment();
+        }
+    };
+    video.onseeked = () => {
+        if (inFlight === null) return;
+        decoded = inFlight;
+        inFlight = null;
+        if (decoded === frame && !dragging) preview.hidden = true;
+        updateAlignment();
+        pumpSeek();
+    };
+    if (video.requestVideoFrameCallback) {
+        const update = (_now, info) => {
+            displayed(info.mediaTime);
+            video.requestVideoFrameCallback(update);
+        };
+        video.requestVideoFrameCallback(update);
+    } else video.ontimeupdate = () => { if (!video.paused) displayed(video.currentTime); };
+    document.addEventListener("keydown", e => {
+        if (e.target.matches("button,input,select,a")) return;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            e.preventDefault();
+            seekFrame(frame + (e.key === "ArrowLeft" ? -1 : 1));
+        }
+    });
+}
+summarize();
+if (!events.length && application.length) $("metric").value = "application_ms";
+selectMetric();
+new ResizeObserver(prepareChart).observe($("chart"));
+setCursor(cursor, true);
+</script>
+</body>
+</html>
