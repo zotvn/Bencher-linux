@@ -109,10 +109,12 @@ for (const [t] of events) {
     const second = Math.floor(t);
     presentedCounts[second] = (presentedCounts[second] || 0) + 1;
 }
-const completedSeconds = Math.floor(report.duration_s);
+const coverageStart = events.length ? Math.max(0, events[0][0] - events[0][1] / 1000) : null;
+const coverageEnd = events.at(-1)?.[0] ?? null;
+const completedSeconds = Math.floor(coverageEnd ?? 0);
 const presentedFps = events.map(([t]) => {
     const second = Math.floor(t);
-    return [t, second < completedSeconds ? presentedCounts[second] : null];
+    return [t, second >= Math.ceil(coverageStart) && second < completedSeconds ? presentedCounts[second] : null];
 });
 const realFps = real.map(([t, ms])=>[t, 1000/ms]);
 const generatedFps = real.map(([t, ms, count])=>[t, count * 1000/ms]);
@@ -211,7 +213,7 @@ function summarize() {
     const legacyLow = legacyIntervals.length >= 100
         ? 1000 / legacyIntervals.at(-Math.ceil(legacyIntervals.length / 100)) : null;
     renderMetrics($("summary"), [
-        ["Average presented FPS", fmt(events.length ? events.length / total : null, 1)],
+        ["Average presented FPS", fmt(coverageEnd > coverageStart ? events.length / (coverageEnd - coverageStart) : null, 1)],
         ["Average application FPS", fmt(applicationSummary.avg_fps, 1)],
         ["Application 1% low", fmt(applicationSummary.low_1, 1)],
         ["Avg. Reflex simulation FPS", fmt(simulationSummary.avg_fps, 1)],
@@ -285,7 +287,8 @@ function updateReadings() {
     for (const [id,m] of metrics) {
         const series = frameSeries.get(id);
         const point = series?.[lower(series,cursor + 1e-9,e=>e[0])-1];
-        const v = series?.length ? point?.[1] : sample && m.read(sample);
+        const withinCoverage = !["event","fps"].includes(id) || cursor <= coverageEnd;
+        const v = series?.length ? (withinCoverage ? point?.[1] : null) : sample && m.read(sample);
         cards.get(id).value.textContent=fmt(v,Number.isInteger(v)?0:2," "+m.unit);
     }
     $("threads").textContent=sample?.lsfg.reason || "";
@@ -506,6 +509,9 @@ $("coverage").textContent = [events.length ? events.length + " Gamescope events"
     simulation.length ? simulation.length + " simulation intervals" : "",
     "Hardware sampled about once per second"].filter(Boolean).join(" · ");
 if (report.unindexed_video) $("filelink").hidden=false;
+if (coverageEnd !== null && total - coverageEnd >= 1) {
+    warnings.push("Presented FPS data ends at " + clock(coverageEnd) + ". The average covers the observed period.");
+}
 if (warnings.length) {
     $("warning").hidden = false;
     $("warning").textContent = warnings.join(" · ");

@@ -82,7 +82,9 @@ class Video:
                 'video/x-raw,format=BGRx ! queue max-size-buffers=3 max-size-bytes=0 '
                 f'max-size-time=0 leaky=downstream name=frames ! {convert}'
                 f'{encode} ! video/x-h264,profile=high ! h264parse ! '
-                'mp4mux trak-timescale=90000 faststart=true ! filesink name=output')
+                # Write the media directly to the report filesystem. Faststart spools
+                # the entire recording to a temporary file, often on RAM-backed /tmp.
+                'mp4mux trak-timescale=90000 faststart=false ! filesink name=output')
         except GLib.Error as error:
             raise RuntimeError(f'Could not prepare the video encoder ({error.message})') from error
         self.pipeline.get_by_name('output').set_property('location', str(path))

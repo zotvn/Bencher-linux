@@ -41,7 +41,7 @@ def doctor():
 
 def parse(argv):
     parser = argparse.ArgumentParser(prog='bencher', description='Linux gaming benchmarks')
-    parser.add_argument('--version', action='version', version='Bencher Linux 0.1.0')
+    parser.add_argument('--version', action='version', version='Bencher Linux 0.1.1')
     commands = parser.add_subparsers(dest='action')
     commands.add_parser('gui', help='Open Live View and settings')
     commands.add_parser('doctor', help='Check which capture paths are ready')

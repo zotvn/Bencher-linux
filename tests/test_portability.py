@@ -33,6 +33,12 @@ class SourceAttribution(unittest.TestCase):
     def test_unknown_generation_keeps_application_frames(self):
         self.assertFalse(self.make('unknown', 0)['real_summary'])
 
+    def test_presented_average_excludes_missing_tail(self):
+        events = [[index / 100, 10.0] for index in range(1, 301)]
+        stats = benchmark.summarize(events, 5)
+        self.assertEqual(stats['observed_until_s'], 3)
+        self.assertAlmostEqual(stats['avg_fps'], 100)
+
 
 class LaunchAndSettings(unittest.TestCase):
     def test_native_and_proton_target_selection(self):

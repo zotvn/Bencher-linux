@@ -52,8 +52,13 @@ def summarize(events, duration):
         limit = max(33.33, 2.5 * statistics.median(previous)) if previous else 33.33
         event.append(int(event[1] >= limit))
         previous.append(event[1])
-    result = frame_summary(events, duration)
+    if not events:
+        return {}
+    start = max(0, events[0][0] - events[0][1] / 1000)
+    end = min(duration, events[-1][0])
+    result = frame_summary(events, max(.001, end - start))
     if result:
+        result.update(observed_from_s=start, observed_until_s=end)
         result['stutters'] = sum(row[2] for row in events)
         bins = [0] * max(1, int(duration))
         for event in events:
